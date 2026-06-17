@@ -42,22 +42,22 @@ const INIT_SHIPMENTS = [
     allocs:{MLMP2:960,MLMS2:840,MLMP4:400,MLMS07:30,MLMP07:90,MLMS10:20,MLMP10:40,MMC5:0,MMCP5:0,MLMN005:0,MMR10L:0}
   },
   {
-    id:1, label:"TWMIL26/07", shipDate:"2026-06-08", arrivalDate:"2026-09-15",
+    id:1, label:"TWMIL26/07", shipDate:"2026-06-17", arrivalDate:"2026-09-15",
     status:"past", note:"已出貨，預計9/15到港",
     allocs:{MLMP2:1200,MLMS2:720,MLMP4:320,MLMS07:60,MLMP07:60,MLMS10:20,MLMP10:40,MMC5:0,MMCP5:0,MLMN005:0,MMR10L:0}
   },
   {
-    id:2, label:"TWMIL26/08", shipDate:"2026-08-02", arrivalDate:"2026-10-31",
+    id:2, label:"TWMIL26/08", shipDate:"2026-06-27", arrivalDate:"2026-09-25",
     status:"planned", note:"✅ 避開中秋後、國慶前",
     allocs:{MLMP2:3666,MLMS2:2538,MLMP4:280,MLMS07:0,MLMP07:0,MLMS10:0,MLMP10:0,MMC5:0,MMCP5:0,MLMN005:0,MMR10L:0}
   },
   {
-    id:3, label:"TWMIL26/09", shipDate:"2026-09-12", arrivalDate:"2026-12-15",
+    id:3, label:"TWMIL26/09", shipDate:"2026-08-17", arrivalDate:"2026-11-15",
     status:"planned", note:"✅ 避開聖誕前兩週",
     allocs:{MLMP2:2679,MLMS2:1833,MLMP4:490,MLMS07:240,MLMP07:120,MLMS10:39,MLMP10:78,MMC5:0,MMCP5:0,MLMN005:0,MMR10L:0}
   },
   {
-    id:4, label:"TWMIL26/10", shipDate:"2026-10-17", arrivalDate:"2027-01-15",
+    id:4, label:"TWMIL26/10", shipDate:"2026-09-26", arrivalDate:"2026-12-25",
     status:"planned", note:"⚠️ 年前必到！春節1/29，最晚1/15到港",
     allocs:{MLMP2:6627,MLMS2:141,MLMP4:0,MLMS07:0,MLMP07:0,MLMS10:0,MLMP10:0,MMC5:0,MMCP5:0,MLMN005:0,MMR10L:0}
   },
