@@ -159,6 +159,15 @@ export default function ProcurementApp() {
       rows.push({"品號":"合計","品名":"","採購量":"","板數":shipmentPallets[si].toFixed(1)});
       XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(rows), sh.label);
     });
+    // 若所有船期都沒有填採購量，改匯出建議訂購量清單
+    if (wb.SheetNames.length === 0) {
+      const recRows = suggestions.filter(s=>s.recQty>0).map(s=>({
+        "品號":s.id,"品名":s.name,"建議訂購量":s.recQty,
+        "現有庫存":s.stock,"在途":s.inTransitQty,"月均銷":Math.round(s.avg),"可撐天數":s.daysLeft>900?"—":Math.round(s.daysLeft)
+      }));
+      if (recRows.length===0) { alert("目前沒有採購數量，也沒有需要補貨的品項。"); return; }
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(recRows), `${container}建議訂購`);
+    }
     XLSX.writeFile(wb, `MOMI訂貨規劃_${container}_26-27.xlsx`);
   };
 
