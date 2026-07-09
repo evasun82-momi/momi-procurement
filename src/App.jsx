@@ -103,7 +103,8 @@ export default function ProcurementApp() {
     const available = p.stock + (inTransit[p.id]||0);
     const daysLeft = daily>0 ? available/daily : 999;
     const status = daysLeft<45?"danger":daysLeft<90?"warning":"ok";
-    return {...p, avg, daily, daysLeft, status, inTransitQty:inTransit[p.id]||0};
+    const recQty = daily>0 ? Math.max(0, Math.ceil((TRANSIT_DAYS+15+7)*daily - available)) : 0;
+    return {...p, avg, daily, daysLeft, status, inTransitQty:inTransit[p.id]||0, recQty};
   }), [catProducts, salesData, avgMonths, inTransit]);
 
   const shipmentPallets = useMemo(() => shipments.map(sh =>
@@ -387,6 +388,12 @@ export default function ProcurementApp() {
                 <div><Label>現有＋在途可撐</Label><BigNum color={statusColors[s.status]}>{s.daysLeft>900?"—":Math.round(s.daysLeft)+"天"}</BigNum></div>
                 <div><Label>月均銷量</Label><BigNum>{Math.round(s.avg).toLocaleString()}</BigNum></div>
               </div>
+              {s.recQty>0 && (
+                <div style={{marginTop:10,padding:"8px 12px",background:s.status==="danger"?"#fef2f2":"#fffbeb",borderRadius:8,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                  <span style={{fontSize:11,fontWeight:600,color:"#92400e"}}>📦 建議訂購量</span>
+                  <span style={{fontSize:18,fontWeight:800,color:s.status==="danger"?"#dc2626":"#b45309"}}>{s.recQty.toLocaleString()}</span>
+                </div>
+              )}
             </Card>
           ))}
         </>)}
