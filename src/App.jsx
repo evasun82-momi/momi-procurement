@@ -103,9 +103,9 @@ export default function ProcurementApp() {
     const available = p.stock + (inTransit[p.id]||0);
     const daysLeft = daily>0 ? available/daily : 999;
     const status = daysLeft<45?"danger":daysLeft<90?"warning":"ok";
-    const recQty = daily>0 ? Math.max(0, Math.ceil((TRANSIT_DAYS+15+7)*daily - available)) : 0;
+    const recQty = daily>0 ? Math.max(0, Math.ceil((TRANSIT_DAYS+15+safetyDays)*daily - available)) : 0;
     return {...p, avg, daily, daysLeft, status, inTransitQty:inTransit[p.id]||0, recQty};
-  }), [catProducts, salesData, avgMonths, inTransit]);
+  }), [catProducts, salesData, avgMonths, inTransit, safetyDays]);
 
   const shipmentPallets = useMemo(() => shipments.map(sh =>
     catProducts.reduce((sum,p) => sum + pallets(Number(sh.allocs[p.id]||0), p), 0)
@@ -166,49 +166,43 @@ export default function ProcurementApp() {
     <div style={{fontFamily:"'Noto Sans TC',system-ui,sans-serif",background:"#f1f5f9",minHeight:"100vh"}}>
 
       <div style={{background:"#1e293b",padding:"14px 18px"}}>
-        <div style={{color:"#64748b",fontSize:11,letterSpacing:2}}>MOMI 摩米</div>
-        <div style={{color:"#fff",fontSize:17,fontWeight:800,marginTop:2,marginBottom:12}}>採購訂貨規劃 2026–27</div>
-        <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
-          <button onClick={()=>setImportStep("stock")}
-            style={{background:"#334155",color:"#e2e8f0",border:"none",borderRadius:8,padding:"8px 14px",fontSize:13,cursor:"pointer"}}>
-            📥 匯入庫存
-          </button>
-          <button onClick={exportOrder}
-            style={{background:containerColor,color:"#fff",border:"none",borderRadius:8,padding:"8px 14px",fontSize:13,cursor:"pointer",fontWeight:700}}>
-            📤 匯出訂單 ({container})
-          </button>
+        <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:10}}>
+          <span style={{fontSize:22}}>📦</span>
+          <div>
+            <div style={{fontSize:16,fontWeight:800,color:"#fff"}}>MOMI 採購訂貨規劃</div>
+            <div style={{fontSize:11,color:"#94a3b8"}}>輸入三個月銷售量＋即時庫存，自動計算建議採購量與到貨日</div>
+          </div>
+        </div>
+        <div style={{display:"flex",gap:8}}>
+          {CONTAINERS.map(c=>(
+            <button key={c.key} onClick={()=>setContainer(c.key)} style={{
+              background:container===c.key?c.color:"transparent",
+              color:container===c.key?"#fff":"#94a3b8",
+              border:`2px solid ${container===c.key?c.color:"#475569"}`,
+              borderRadius:99,padding:"5px 14px",fontSize:13,fontWeight:700,cursor:"pointer",
+              transition:"all 0.15s"
+            }}>{c.label}</button>
+          ))}
         </div>
       </div>
 
-      <div style={{background:"#0f172a",padding:"0 16px",display:"flex",gap:4}}>
-        {CONTAINERS.map(c=>(
-          <button key={c.key} onClick={()=>setContainer(c.key)} style={{
-            background:"none",border:"none",padding:"11px 16px",fontSize:13,cursor:"pointer",fontWeight:700,
-            color:container===c.key?c.color:"#64748b",
-            borderBottom:container===c.key?`3px solid ${c.color}`:"3px solid transparent",
-          }}>{c.label}</button>
-        ))}
-      </div>
-
-      {importStep && (
-        <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.5)",zIndex:100,display:"flex",alignItems:"center",justifyContent:"center",padding:24}}>
-          <div style={{background:"#fff",borderRadius:16,padding:28,width:"100%",maxWidth:380}}>
-            <div style={{fontSize:16,fontWeight:700,marginBottom:8}}>匯入多倉庫存表</div>
-            <div style={{color:"#64748b",fontSize:13,marginBottom:16}}>從鼎新A1「多倉庫存表」轉出Excel，需有欄位：品號、數量合計</div>
+      {importStep==="stock" && (
+        <div style={{position:"fixed",inset:0,background:"#0008",zIndex:999,display:"flex",alignItems:"center",justifyContent:"center"}}>
+          <div style={{background:"#fff",borderRadius:14,padding:28,width:"100%",maxWidth:380}}>
+            <div style={{fontSize:15,fontWeight:700,marginBottom:12}}>📥 匯入即時庫存</div>
+            <div style={{fontSize:12,color:"#64748b",marginBottom:12}}>請上傳「多倉庫存表」Excel，系統會比對品號更新庫存</div>
             <input type="file" accept=".xlsx,.xls" onChange={handleStockImport} style={{marginBottom:16,width:"100%"}} />
-            <button onClick={()=>setImportStep(null)}
-              style={{background:"#f1f5f9",border:"none",borderRadius:8,padding:"10px 20px",cursor:"pointer"}}>取消</button>
+            <button onClick={()=>setImportStep(null)} style={{width:"100%",background:"#f1f5f9",border:"none",borderRadius:8,padding:"10px",cursor:"pointer"}}>取消</button>
           </div>
         </div>
       )}
 
-      <div style={{background:"#fff",borderBottom:"1px solid #e2e8f0",display:"flex"}}>
-        {[["schedule","船期總覽"],["alloc","分配訂貨"],["pressure","庫壓評估"],["suggest","庫存狀況"],["products","品項"],["settings","參數"]].map(([key,label])=>(
+      <div style={{display:"flex",borderBottom:"1px solid #e2e8f0",background:"#fff",position:"sticky",top:0,zIndex:10}}>
+        {[["schedule","🗓 船期規劃"],["status","📊 庫存狀況"],["pressure","📦 庫壓評估"],["products","✏️ 品項管理"],["info","⚙️ 設定"]].map(([key,label])=>(
           <button key={key} onClick={()=>setActiveTab(key)} style={{
-            flex:1,background:"none",border:"none",
-            borderBottom:activeTab===key?`3px solid ${containerColor}`:"3px solid transparent",
-            color:activeTab===key?containerColor:"#64748b",
-            padding:"11px 2px",fontSize:12,cursor:"pointer",fontWeight:activeTab===key?700:400
+            flex:1,padding:"12px 4px",fontSize:12,fontWeight:600,
+            color:activeTab===key?containerColor:"#64748b",background:"none",border:"none",
+            borderBottom:activeTab===key?`3px solid ${containerColor}`:"3px solid transparent",cursor:"pointer"
           }}>{label}</button>
         ))}
       </div>
@@ -239,124 +233,165 @@ export default function ProcurementApp() {
                     <div style={{fontSize:18,fontWeight:800,color:isOver?"#ef4444":sh.status==="past"?"#94a3b8":"#1e293b"}}>
                       {pals.toFixed(1)}<span style={{fontSize:12,fontWeight:400,color:"#94a3b8"}}> / {CONTAINER_PALLETS}板</span>
                     </div>
-                    <div style={{fontSize:11,color:isOver?"#ef4444":containerColor,fontWeight:600}}>
+                    <div style={{fontSize:11,color:isOver?"#ef4444":"#94a3b8"}}>
                       {isOver?`超出${(pals-CONTAINER_PALLETS).toFixed(1)}板`:`剩${(CONTAINER_PALLETS-pals).toFixed(1)}板`}
                     </div>
                   </div>
                 </div>
-
-                {pals>0 && (
-                  <div style={{background:"#f1f5f9",borderRadius:99,height:8,marginBottom:12,overflow:"hidden"}}>
-                    <div style={{height:"100%",borderRadius:99,width:`${pct}%`,
-                      background:sh.status==="past"?"#cbd5e1":isOver?"#ef4444":pct>85?"#f59e0b":containerColor}}/>
-                  </div>
-                )}
-
-                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:8}}>
+                <div style={{height:6,background:"#f1f5f9",borderRadius:99,marginBottom:10}}>
+                  <div style={{height:"100%",borderRadius:99,width:`${pct}%`,
+                    background:sh.status==="past"?"#cbd5e1":isOver?"#ef4444":pct>85?"#f59e0b":containerColor}}/>
+                </div>
+                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:10}}>
                   <div>
-                    <Label>出貨日</Label>
+                    <div style={{fontSize:10,color:"#94a3b8",marginBottom:2}}>出貨日</div>
                     {sh.status==="past"
-                      ? <div style={{fontSize:14,fontWeight:600,color:"#94a3b8"}}>{sh.shipDate}</div>
-                      : <input type="date" value={sh.shipDate} onChange={e=>updateShipment(sh.id,"shipDate",e.target.value)}
-                          style={{width:"100%",border:"1px solid #e2e8f0",borderRadius:8,padding:"7px 10px",fontSize:13,boxSizing:"border-box"}}/>
-                    }
+                      ? <div style={{fontSize:13,fontWeight:600,color:"#94a3b8"}}>{sh.shipDate}</div>
+                      : <input value={sh.shipDate} onChange={e=>updateShipment(sh.id,"shipDate",e.target.value)} type="date"
+                          style={{width:"100%",border:"1px solid #e2e8f0",borderRadius:8,padding:"7px 10px",fontSize:13,boxSizing:"border-box"}}/>}
                   </div>
                   <div>
-                    <Label>預計到港</Label>
+                    <div style={{fontSize:10,color:"#94a3b8",marginBottom:2}}>預計到港</div>
                     {sh.status==="past"
-                      ? <div style={{fontSize:14,fontWeight:600,color:"#94a3b8"}}>{sh.arrivalDate}</div>
-                      : <input type="date" value={sh.arrivalDate} onChange={e=>updateShipment(sh.id,"arrivalDate",e.target.value)}
-                          style={{width:"100%",border:"1px solid #e2e8f0",borderRadius:8,padding:"7px 10px",fontSize:13,boxSizing:"border-box"}}/>
-                    }
+                      ? <div style={{fontSize:13,fontWeight:600,color:"#94a3b8"}}>{sh.arrivalDate}</div>
+                      : <input value={sh.arrivalDate} onChange={e=>updateShipment(sh.id,"arrivalDate",e.target.value)} type="date"
+                          style={{width:"100%",border:"1px solid #e2e8f0",borderRadius:8,padding:"7px 10px",fontSize:13,boxSizing:"border-box"}}/>}
                   </div>
                 </div>
-
-                {pals>0 && (
-                  <div style={{background:"#f8fafc",borderRadius:10,padding:"10px 12px",fontSize:12}}>
-                    {catProducts.filter(p=>Number(sh.allocs[p.id]||0)>0).map(p=>{
-                      const qty = Number(sh.allocs[p.id]);
+                {Object.entries(sh.allocs).filter(([,q])=>Number(q)>0).length>0 && (
+                  <div style={{marginBottom:8}}>
+                    {Object.entries(sh.allocs).filter(([,q])=>Number(q)>0).map(([pid,qty])=>{
+                      const p = catProducts.find(x=>x.id===pid);
+                      if(!p) return null;
                       return (
-                        <div key={p.id} style={{display:"flex",justifyContent:"space-between",marginBottom:3,color:sh.status==="past"?"#94a3b8":"#475569"}}>
-                          <span style={{flex:1,marginRight:8,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{p.name}</span>
-                          <span style={{fontWeight:600,whiteSpace:"nowrap"}}>{qty.toLocaleString()} ／ {pallets(qty,p).toFixed(1)}板</span>
+                        <div key={pid} style={{display:"flex",justifyContent:"space-between",marginBottom:3,color:sh.status==="past"?"#94a3b8":"#475569"}}>
+                          <span style={{fontSize:12}}>{p.name}</span>
+                          <span style={{fontWeight:600,whiteSpace:"nowrap"}}>{Number(qty).toLocaleString()} ／ {pallets(Number(qty),p).toFixed(1)}板</span>
                         </div>
                       );
                     })}
                   </div>
                 )}
-
-                {sh.note && (
-                  <div style={{fontSize:11,color:sh.status==="past"?"#94a3b8":"#64748b",
-                    background:sh.status==="past"?"#f8fafc":sh.note.includes("⚠️")?"#fef9c3":"#f0fdf4",
-                    borderRadius:8,padding:"7px 10px",marginTop:8}}>
-                    {sh.note}
-                  </div>
-                )}
+                <div style={{fontSize:11,color:sh.status==="past"?"#94a3b8":"#64748b",
+                  background:sh.status==="past"?"#f8fafc":sh.note.includes("⚠️")?"#fef9c3":"#f0fdf4",
+                  borderRadius:8,padding:"6px 10px"}}>
+                  {sh.note||"（無備註）"}
+                </div>
               </Card>
             );
           })}
           <button onClick={addShipment} style={{width:"100%",background:"none",border:"2px dashed #d1d5db",borderRadius:12,padding:"14px",fontSize:13,color:"#9ca3af",cursor:"pointer"}}>
             ＋ 新增船期
           </button>
+          <div style={{marginTop:16,display:"flex",gap:8}}>
+            <button onClick={exportOrder} style={{flex:1,background:containerColor,color:"#fff",border:"none",borderRadius:10,padding:"12px",fontSize:13,fontWeight:700,cursor:"pointer"}}>
+              📥 匯出訂貨單 Excel
+            </button>
+            <button onClick={()=>setImportStep("stock")} style={{flex:1,background:"#f1f5f9",color:"#475569",border:"none",borderRadius:10,padding:"12px",fontSize:13,fontWeight:700,cursor:"pointer"}}>
+              📤 更新庫存
+            </button>
+          </div>
         </>)}
 
-        {activeTab==="alloc" && (<>
-          <div style={{display:"flex",gap:8,overflowX:"auto",marginBottom:14,paddingBottom:2}}>
-            {shipments.map((sh,si)=>{
-              const p = shipmentPallets[si];
-              const over = p>CONTAINER_PALLETS;
+        {activeTab==="pressure" && (<>
+          <Card style={{background:"#f0fdf4",borderColor:"#bbf7d0"}}>
+            <div style={{fontSize:13,fontWeight:600,color:"#166534",marginBottom:4}}>📦 {container} 庫壓評估</div>
+            <div style={{fontSize:11,color:"#166534"}}>✅ 正常 0–30天 ／ 🟡 偏高 30–60天 ／ 🔴 過重 60天以上 ／ ⚠️ 斷貨風險</div>
+          </Card>
+          {(() => {
+            const shipArr = shipments.map(sh => new Date(sh.arrivalDate));
+            const pressureColors = { over:"#ef4444", high:"#f59e0b", ok:"#22c55e", zero:"#94a3b8" };
+            const pressureLabels = { over:"🔴過重", high:"🟡偏高", ok:"✅正常", zero:"—" };
+            return catProducts.map(prod => {
+              const avg = avgSales(prod.id, avgMonths, salesData);
+              const daily = avg / 30;
+              if (daily === 0) return null;
+              const rows = shipments.map((sh, si) => {
+                const daysToArr = Math.max(0, (shipArr[si] - today) / 86400000);
+                const prevOrders = shipments.slice(0, si).reduce((s, prev) => s + Number(prev.allocs[prod.id]||0), 0);
+                const stockAtArr = prod.stock + prevOrders - daily * (shipArr[si] > today ? (shipArr[si]-today)/86400000 : 0);
+                const orderQty = Number(sh.allocs[prod.id]||0);
+                const stockAfter = stockAtArr + orderQty;
+                const daysAfter = stockAfter / daily;
+                const pLevel = daysAfter > 60 ? "over" : daysAfter > 30 ? "high" : daysAfter > 0 ? "ok" : "zero";
+                return { sh, orderQty, daysAfter: Math.round(daysAfter), pLevel };
+              });
+              const p = Math.round(prod.stock / daily);
+              const over = p > CONTAINER_PALLETS;
               return (
-                <div key={sh.id} style={{background:"#fff",borderRadius:10,border:`1.5px solid ${over?"#fecaca":sh.status==="past"?"#f1f5f9":"#e2e8f0"}`,
-                  padding:"8px 12px",minWidth:80,flexShrink:0,textAlign:"center"}}>
-                  <div style={{fontSize:9,fontWeight:700,color:"#64748b"}}>{sh.label}</div>
-                  <div style={{fontSize:16,fontWeight:800,color:over?"#ef4444":sh.status==="past"?"#94a3b8":"#1e293b"}}>{p.toFixed(1)}</div>
-                  <div style={{fontSize:9,color:"#94a3b8"}}>/{CONTAINER_PALLETS}板</div>
-                  {over && <div style={{fontSize:9,color:"#ef4444",fontWeight:600}}>超出!</div>}
-                </div>
+                <Card key={prod.id}>
+                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
+                    <div>
+                      <div style={{fontSize:13,fontWeight:700}}>{prod.name}</div>
+                      <div style={{fontSize:10,color:"#94a3b8",fontFamily:"monospace"}}>{prod.id}</div>
+                    </div>
+                    <div style={{textAlign:"right"}}>
+                      <div style={{fontSize:16,fontWeight:800,color:over?"#ef4444":"#1e293b"}}>{p}天</div>
+                      <div style={{fontSize:9,color:"#94a3b8"}}>/{CONTAINER_PALLETS}板</div>
+                    </div>
+                  </div>
+                  <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
+                    {rows.map(({sh,orderQty,daysAfter,pLevel})=>(
+                      <div key={sh.id} style={{background:"#fff",borderRadius:10,border:`1.5px solid ${over?"#fecaca":sh.status==="past"?"#f1f5f9":"#e2e8f0"}`,
+                        padding:"8px 12px",minWidth:80,flexShrink:0,textAlign:"center"}}>
+                        <div style={{fontSize:10,color:"#94a3b8",marginBottom:2}}>{sh.label}</div>
+                        <div style={{fontSize:16,fontWeight:800,color:over?"#ef4444":sh.status==="past"?"#94a3b8":"#1e293b"}}>{orderQty>0?orderQty.toLocaleString():"—"}</div>
+                        <div style={{fontSize:10,color:pressureColors[pLevel],fontWeight:600}}>{pressureLabels[pLevel]}</div>
+                      </div>
+                    ))}
+                  </div>
+                </Card>
               );
-            })}
-          </div>
+            });
+          })()}
+        </>)}
 
+        {activeTab==="products" && (<>
+          <Card style={{background:"#eff6ff",borderColor:"#bfdbfe"}}>
+            <div style={{fontSize:13,fontWeight:600,color:"#1e40af",marginBottom:2}}>✏️ {container} 品項管理</div>
+            <div style={{fontSize:11,color:"#3730a3"}}>可在各船期欄位直接填入採購數量。</div>
+          </Card>
           {catProducts.map(prod=>{
-            const s = suggestions.find(x=>x.id===prod.id)||{...prod,avg:0,daily:0,daysLeft:999,status:"ok",inTransitQty:0};
+            const s = suggestions.find(x=>x.id===prod.id)||{...prod,avg:0,daily:0,daysLeft:999,status:"ok",inTransitQty:0,recQty:0};
             return (
               <Card key={prod.id} borderColor={s.status==="danger"?"#fecaca":s.status==="warning"?"#fde68a":"#e2e8f0"}>
                 <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:10}}>
-                  <div style={{flex:1,marginRight:8}}>
-                    <div style={{fontSize:13,fontWeight:700,lineHeight:1.4}}>{prod.name}</div>
+                  <div style={{flex:1,minWidth:0,paddingRight:8}}>
+                    <div style={{fontSize:13,fontWeight:700,lineHeight:1.3}}>{prod.name}</div>
                     <div style={{fontSize:10,color:"#94a3b8",fontFamily:"monospace"}}>{prod.id}</div>
                   </div>
                   <span style={{background:statusColors[s.status]+"22",color:statusColors[s.status],
-                    borderRadius:99,padding:"2px 8px",fontSize:11,fontWeight:700,whiteSpace:"nowrap"}}>
+                    borderRadius:99,padding:"3px 10px",fontSize:11,fontWeight:700,whiteSpace:"nowrap"}}>
                     {statusLabels[s.status]}
                   </span>
                 </div>
-                <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:8,marginBottom:12,
-                  background:"#f8fafc",borderRadius:10,padding:"10px 12px"}}>
+                <div style={{display:"flex",gap:12,marginBottom:10,flexWrap:"wrap"}}>
                   <div><div style={{fontSize:9,color:"#94a3b8"}}>現有庫存</div><div style={{fontSize:13,fontWeight:700}}>{prod.stock.toLocaleString()}</div></div>
                   <div><div style={{fontSize:9,color:"#94a3b8"}}>在途</div><div style={{fontSize:13,fontWeight:700,color:containerColor}}>{s.inTransitQty.toLocaleString()}</div></div>
                   <div><div style={{fontSize:9,color:"#94a3b8"}}>月均銷</div><div style={{fontSize:13,fontWeight:700}}>{Math.round(s.avg).toLocaleString()}</div></div>
-                  <div>
-                    <div style={{fontSize:9,color:"#94a3b8"}}>可撐天數</div>
+                  <div><div style={{fontSize:9,color:"#94a3b8"}}>可撐天數</div>
                     <div style={{fontSize:13,fontWeight:700,color:statusColors[s.status]}}>{s.daysLeft>900?"—":Math.round(s.daysLeft)+"天"}</div>
                   </div>
+                  {s.recQty>0 && <div><div style={{fontSize:9,color:"#94a3b8"}}>建議訂購</div>
+                    <div style={{fontSize:13,fontWeight:800,color:s.status==="danger"?"#dc2626":"#b45309"}}>{s.recQty.toLocaleString()}</div>
+                  </div>}
                 </div>
                 <div style={{display:"grid",gridTemplateColumns:`repeat(${Math.min(shipments.length,5)},1fr)`,gap:6}}>
-                  {shipments.map((sh)=>{
-                    const qty = Number(sh.allocs[prod.id]||0);
+                  {shipments.map((sh,si)=>{
                     const isPast = sh.status==="past";
                     return (
-                      <div key={sh.id}>
-                        <div style={{fontSize:9,color:isPast?"#94a3b8":"#475569",fontWeight:600,marginBottom:3,
-                          whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{sh.label}</div>
-                        <input type="number" value={qty||""} placeholder="0" disabled={isPast}
+                      <div key={sh.id} style={{textAlign:"center"}}>
+                        <div style={{fontSize:9,color:"#94a3b8",marginBottom:3}}>{sh.label}</div>
+                        <input
+                          type="number" min="0"
+                          value={sh.allocs[prod.id]||""}
                           onChange={e=>updateAlloc(sh.id,prod.id,e.target.value)}
+                          disabled={isPast}
                           style={{width:"100%",boxSizing:"border-box",
-                            border:`1.5px solid ${isPast?"#f1f5f9":qty>0?containerColor:"#e2e8f0"}`,
-                            borderRadius:8,padding:"7px 5px",fontSize:12,textAlign:"right",
-                            background:isPast?"#f8fafc":qty>0?containerColor+"11":"#fff",
-                            fontWeight:600,color:isPast?"#94a3b8":"#1e293b"}}/>
-                        <div style={{fontSize:9,color:"#94a3b8",textAlign:"right",marginTop:2}}>{qty>0?pallets(qty,prod).toFixed(1)+"板":"—"}</div>
+                            border:`1px solid ${isPast?"#f1f5f9":"#e2e8f0"}`,
+                            borderRadius:8,padding:"6px 4px",fontSize:13,textAlign:"center",
+                            background:isPast?"#f8fafc":"#fff",color:isPast?"#94a3b8":"#1e293b"}}
+                        />
                       </div>
                     );
                   })}
@@ -366,7 +401,7 @@ export default function ProcurementApp() {
           })}
         </>)}
 
-        {activeTab==="suggest" && (<>
+        {activeTab==="status" && (<>
           <Card style={{background:"#eff6ff",borderColor:"#bfdbfe"}}>
             <div style={{fontSize:13,fontWeight:600,color:"#1e40af",marginBottom:2}}>📊 {container} 庫存狀況</div>
             <div style={{fontSize:11,color:"#3730a3"}}>可撐天數以月均銷量計算，在途含未到港船期數量。</div>
@@ -398,120 +433,28 @@ export default function ProcurementApp() {
           ))}
         </>)}
 
-        {activeTab==="pressure" && (<>
-          <Card style={{background:"#f0fdf4",borderColor:"#bbf7d0"}}>
-            <div style={{fontSize:13,fontWeight:600,color:"#166534",marginBottom:4}}>📦 {container} 庫壓評估</div>
-            <div style={{fontSize:11,color:"#166534"}}>✅ 正常 0–30天 ／ 🟡 偏高 30–60天 ／ 🔴 過重 60天以上 ／ ⚠️ 斷貨風險</div>
-          </Card>
-          {(() => {
-            const shipArr = shipments.map(sh => new Date(sh.arrivalDate));
-            const pressureColors = { over:"#ef4444", high:"#f59e0b", ok:"#22c55e", zero:"#94a3b8" };
-            const pressureLabels = { over:"🔴過重", high:"🟡偏高", ok:"✅正常", zero:"—" };
-            return catProducts.map(prod => {
-              const avg = avgSales(prod.id, avgMonths, salesData);
-              const daily = avg / 30;
-              if (daily === 0) return null;
-              const rows = shipments.map((sh, si) => {
-                const daysToArr = Math.max(0, (shipArr[si] - today) / 86400000);
-                const prevOrders = shipments.slice(0, si).reduce((s, prev) => s + Number(prev.allocs[prod.id]||0), 0);
-                const thisOrder = Number(sh.allocs[prod.id]||0);
-                const stockAtArr = Math.max(0, prod.stock + (inTransit[prod.id]||0) + prevOrders - daily * daysToArr);
-                const totalAtArr = stockAtArr + thisOrder;
-                const daysOfStock = totalAtArr / daily;
-                const pressure = daysOfStock > 60 ? "over" : daysOfStock > 30 ? "high" : daysOfStock > 0 ? "ok" : "zero";
-                const stockoutBefore = stockAtArr <= 0 && sh.status !== "past";
-                return { sh, stockAtArr, thisOrder, daysOfStock, pressure, stockoutBefore };
-              });
-              const hasIssue = rows.some(r => r.pressure === "over" || r.stockoutBefore);
-              return (
-                <Card key={prod.id} borderColor={hasIssue ? "#fecaca" : "#e2e8f0"}>
-                  <div style={{fontSize:13,fontWeight:700,marginBottom:2}}>{prod.name}</div>
-                  <div style={{fontSize:10,color:"#94a3b8",fontFamily:"monospace",marginBottom:12}}>{prod.id} ｜ 月均 {Math.round(avg).toLocaleString()}</div>
-                  {rows.map(({sh, stockAtArr, thisOrder, daysOfStock, pressure, stockoutBefore}) => (
-                    <div key={sh.id} style={{marginBottom:10,padding:"10px 12px",borderRadius:10,
-                      background: sh.status==="past"?"#f8fafc":pressure==="over"?"#fef2f2":pressure==="high"?"#fffbeb":"#f0fdf4",
-                      border:`1px solid ${sh.status==="past"?"#f1f5f9":pressureColors[pressure]+"44"}`}}>
-                      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:6}}>
-                        <span style={{fontSize:12,fontWeight:700,color:sh.status==="past"?"#94a3b8":"#475569"}}>{sh.label} {sh.arrivalDate}</span>
-                        {sh.status!=="past" && <span style={{fontSize:11,fontWeight:700,color:pressureColors[pressure]}}>{pressureLabels[pressure]}</span>}
-                        {sh.status==="past" && <span style={{fontSize:11,color:"#94a3b8"}}>已出貨</span>}
-                      </div>
-                      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:8}}>
-                        <div><div style={{fontSize:9,color:"#94a3b8"}}>到港剩餘庫存</div>
-                          <div style={{fontSize:13,fontWeight:700,color:stockoutBefore?"#ef4444":"#1e293b"}}>{stockoutBefore?"⚠️斷貨":Math.round(stockAtArr).toLocaleString()}</div></div>
-                        <div><div style={{fontSize:9,color:"#94a3b8"}}>本批採購量</div>
-                          <div style={{fontSize:13,fontWeight:700,color:thisOrder>0?containerColor:"#94a3b8"}}>{thisOrder>0?thisOrder.toLocaleString():"未採購"}</div></div>
-                        <div><div style={{fontSize:9,color:"#94a3b8"}}>到港後天數</div>
-                          <div style={{fontSize:13,fontWeight:700,color:sh.status==="past"?"#94a3b8":pressureColors[pressure]}}>{Math.round(daysOfStock)}天</div></div>
-                      </div>
-                      {sh.status!=="past" && (
-                        <div style={{marginTop:8,background:"rgba(255,255,255,0.6)",borderRadius:8,height:6,overflow:"hidden"}}>
-                          <div style={{height:"100%",borderRadius:8,width:`${Math.min(100,(daysOfStock/90)*100)}%`,background:pressureColors[pressure]}}/>
-                        </div>
-                      )}
-                    </div>
-                  ))}
-                </Card>
-              );
-            });
-          })()}
-        </>)}
-
-        {activeTab==="products" && (<>
-          <div style={{fontSize:12,color:"#94a3b8",marginBottom:14}}>
-            {container} 共 {catProducts.length} 個品項。upp/pslots/moq 請依實際物流條件填入。
-          </div>
-          {catProducts.map((p)=>{
-            const globalIdx = products.findIndex(x=>x.id===p.id);
-            return (
-              <Card key={p.id}>
-                <div style={{fontSize:14,fontWeight:700,marginBottom:2}}>{p.name}</div>
-                <div style={{fontSize:10,color:"#94a3b8",fontFamily:"monospace",marginBottom:14}}>{p.id}</div>
-                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
-                  {[
-                    {label:"現有庫存",key:"stock",step:1,unit:"個"},
-                    {label:"每板數量",key:"upp",step:1,unit:"個/板"},
-                    {label:"佔板位數",key:"pslots",step:0.5,unit:"板位"},
-                    {label:"MOQ",key:"moq",step:1,unit:"個"},
-                  ].map(({label,key,step,unit})=>(
-                    <div key={key}>
-                      <Label>{label}</Label>
-                      <div style={{display:"flex",alignItems:"center",gap:6}}>
-                        <input type="number" step={step} value={p[key]}
-                          onChange={e=>setProducts(prev=>prev.map((x,j)=>j===globalIdx?{...x,[key]:Number(e.target.value)}:x))}
-                          style={{flex:1,minWidth:0,border:"1px solid #e2e8f0",borderRadius:8,padding:"9px 10px",fontSize:15,textAlign:"right",fontWeight:600}}/>
-                        <span style={{fontSize:11,color:"#94a3b8",whiteSpace:"nowrap"}}>{unit}</span>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </Card>
-            );
-          })}
-        </>)}
-
-        {activeTab==="settings" && (<>
+        {activeTab==="info" && (<>
           <Card>
-            <Label>銷量計算參考月數</Label>
-            <div style={{fontSize:12,color:"#94a3b8",marginBottom:10}}>用最近幾個月銷量計算日均值</div>
+            <Label>計算月份數</Label>
             <select value={avgMonths} onChange={e=>setAvgMonths(Number(e.target.value))}
-              style={{width:"100%",border:"1px solid #e2e8f0",borderRadius:8,padding:"10px 14px",fontSize:16}}>
+              style={{width:"100%",border:"1px solid #e2e8f0",borderRadius:8,padding:"8px 10px",fontSize:13,marginTop:4}}>
               {[1,2,3].map(m=><option key={m} value={m}>{m} 個月（{m===1?"6月":m===2?"5-6月":"4-6月"}）</option>)}
             </select>
+          </Card>
+          <Card>
+            <Label>安全天數緩衝（建議訂購量用）</Label>
+            <input type="number" min="0" max="30" value={safetyDays} onChange={e=>setSafetyDays(Number(e.target.value))}
+              style={{width:"100%",border:"1px solid #e2e8f0",borderRadius:8,padding:"8px 10px",fontSize:13,marginTop:4,boxSizing:"border-box"}}/>
           </Card>
           <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
             <Card><Label>運送天數</Label><BigNum size={24} color="#94a3b8">{TRANSIT_DAYS} 天</BigNum></Card>
             <Card><Label>貨櫃板數</Label><BigNum size={24} color="#94a3b8">{CONTAINER_PALLETS} 板</BigNum>{containerCfg.fixedPallets>0&&<div style={{fontSize:11,color:"#94a3b8",marginTop:2}}>共{containerCfg.pallets}板，固定{containerCfg.fixedPallets}板</div>}</Card>
           </div>
           <Card>
-            <Label>品項分類統計</Label>
-            {CONTAINERS.map(c=>{
-              const cnt = products.filter(p=>p.category===c.key).length;
-              return <div key={c.key} style={{display:"flex",justifyContent:"space-between",padding:"6px 0",borderBottom:"1px solid #f1f5f9",fontSize:13}}>
-                <span style={{color:c.color,fontWeight:600}}>{c.label}</span>
-                <span style={{color:"#475569"}}>{cnt} 個品項</span>
-              </div>;
-            })}
+            <Label>建議訂購量公式</Label>
+            <div style={{fontSize:12,color:"#64748b",lineHeight:1.6}}>
+              (前置{TRANSIT_DAYS}天 + 目標庫存15天 + 安全{safetyDays}天) × 日均銷量 − (現有庫存 + 在途庫存)
+            </div>
           </Card>
         </>)}
 
