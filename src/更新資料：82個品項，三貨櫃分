@@ -1,0 +1,695 @@
+import { useState, useMemo, useCallback } from "react";
+import * as XLSX from "xlsx";
+import { INIT_PRODUCTS, INIT_SALES } from "./data.js";
+
+const CONTAINER_PALLETS = 48;
+const TRANSIT_DAYS = 60; // 下單後2個月出貨
+
+const statusColors = { danger: "#ef4444", warning: "#f59e0b", ok: "#22c55e" };
+const statusLabels  = { danger: "⚠️快斷貨", warning: "留意", ok: "正常" };
+
+const CONTAINERS = [
+  { key: "美麗多", label: "🪵 美麗多", color: "#8b5cf6" },
+  { key: "飼料",  label: "🥕 飼料",  color: "#f59e0b" },
+  { key: "牧草",  label: "🌿 牧草",  color: "#22c55e" },
+];
+
+const makeShipments = () => ({
+  美麗多: [
+    { id:0, label:"TWMIL26/06", shipDate:"2026-05-01", arrivalDate:"2026-07-31", status:"past",    note:"已出貨，預計7/31到港", allocs:{MLMP2:960,MLMS2:840,MLMP4:400,MLMS07:30,MLMP07:90,MLMS10:20,MLMP10:40} },
+    { id:1, label:"TWMIL26/07", shipDate:"2026-06-17", arrivalDate:"2026-09-15", status:"past",    note:"已出貨，預計9/15到港", allocs:{MLMP2:1200,MLMS2:720,MLMP4:320,MLMS07:60,MLMP07:60,MLMS10:20,MLMP10:40} },
+    { id:2, label:"TWMIL26/08", shipDate:"2026-06-27", arrivalDate:"2026-09-25", status:"planned", note:"✅ 避開中秋後、國慶前", allocs:{MLMP2:3666,MLMS2:2538,MLMP4:280} },
+    { id:3, label:"TWMIL26/09", shipDate:"2026-08-17", arrivalDate:"2026-11-15", status:"planned", note:"✅ 避開聖誕前兩週",     allocs:{MLMP2:2679,MLMS2:1833,MLMP4:490,MLMS07:240,MLMP07:120,MLMS10:39,MLMP10:78} },
+    { id:4, label:"TWMIL26/10", shipDate:"2026-09-26", arrivalDate:"2026-12-25", status:"planned", note:"⚠️ 年前必到！",        allocs:{MLMP2:6627,MLMS2:141} },
+  ],
+  飼料: [
+    { id:0, label:"FEED26/01", shipDate:"2026-07-09", arrivalDate:"2026-09-09", status:"planned", note:"", allocs:{} },
+    { id:1, label:"FEED26/02", shipDate:"2026-09-09", arrivalDate:"2026-11-09", status:"planned", note:"", allocs:{} },
+    { id:2, label:"FEED26/03", shipDate:"2026-11-09", arrivalDate:"2027-01-09", status:"planned", note:"", allocs:{} },
+  ],
+  牧草: [
+    { id:0, label:"HAY26/01", shipDate:"2026-07-09", arrivalDate:"2026-09-09", status:"planned", note:"", allocs:{} },
+    { id:1, label:"HAY26/02", shipDate:"2026-09-09", arrivalDate:"2026-11-09", status:"planned", note:"", allocs:{} },
+    { id:2, label:"HAY26/03", shipDate:"2026-11-09", arrivalDate:"2027-01-09", status:"planned", note:"", allocs:{} },
+  ],
+});
+
+function avgSales(id, months, data) {
+  const d = (data[id]||[]).slice(0, months);
+  return d.length ? d.reduce((a,b)=>a+b,0)/d.length : 0;
+}
+function addDays(dateStr, days) {
+  if (!dateStr) return "";
+  const d = new Date(dateStr);
+  d.setDate(d.getDate()+days);
+  return d.toISOString().slice(0,10);
+}
+function pallets(qty, p) {
+  return qty>0 && p.upp>0 ? (qty/p.upp)*p.pslots : 0;
+}
+
+const Label = ({children}) => (
+  <div style={{fontSize:11,color:"#94a3b8",marginBottom:3,fontWeight:600,textTransform:"uppercase",letterSpacing:0.5}}>{children}</div>
+);
+const BigNum = ({children,color,size=20}) => (
+  <div style={{fontSize:size,fontWeight:800,color:color||"#1e293b",lineHeight:1.1}}>{children}</div>
+);
+const Card = ({children,borderColor,style={}}) => (
+  <div style={{background:"#fff",borderRadius:14,border:`1.5px solid ${borderColor||"#e2e8f0"}`,padding:"16px 18px",marginBottom:14,...style}}>
+    {children}
+  </div>
+);
+
+const shipBadge = {
+  past:    {bg:"#f1f5f9",color:"#64748b",text:"已出貨"},
+  pending: {bg:"#fef9c3",color:"#92400e",text:"待確認"},
+  planned: {bg:"#dcfce7",color:"#166534",text:"已規劃"},
+};
+
+export default function ProcurementApp() {
+  const [products, setProducts]         = useState(INIT_PRODUCTS);
+  const [salesData]                     = useState(INIT_SALES);
+  const [avgMonths, setAvgMonths]       = useState(3);
+  const [safetyDays, setSafetyDays]     = useState(7);
+  const [activeTab, setActiveTab]       = useState("schedule");
+  const [importStep, setImportStep]     = useState(null);
+  const [allShipments, setAllShipments] = useState(makeShipments);
+  const [container, setContainer]       = useState("美麗多");
+
+  const today = new Date();
+  const containerColor = CONTAINERS.find(c=>c.key===container)?.color || "#3b82f6";
+
+  const shipments = allShipments[container];
+  const setShipments = useCallback((updater) => {
+    setAllShipments(prev => ({...prev, [container]: typeof updater==="function" ? updater(prev[container]) : updater}));
+  }, [container]);
+
+  const catProducts = useMemo(() => products.filter(p => p.category === container), [products, container]);
+
+  const inTransit = useMemo(() => {
+    const t = {}; catProducts.forEach(p => { t[p.id]=0; });
+    shipments.forEach(sh => {
+      if (new Date(sh.arrivalDate) > today) {
+        Object.entries(sh.allocs).forEach(([id,qty]) => { if(t[id]!==undefined) t[id]=(t[id]||0)+Number(qty||0); });
+      }
+    });
+    return t;
+  }, [shipments, catProducts]);
+
+  const suggestions = useMemo(() => catProducts.map(p => {
+    const avg   = avgSales(p.id, avgMonths, salesData);
+    const daily = avg/30;
+    const available = p.stock + (inTransit[p.id]||0);
+    const daysLeft = daily>0 ? available/daily : 999;
+    const status = daysLeft<45?"danger":daysLeft<90?"warning":"ok";
+    return {...p, avg, daily, daysLeft, status, inTransitQty:inTransit[p.id]||0};
+  }), [catProducts, salesData, avgMonths, inTransit]);
+
+  const shipmentPallets = useMemo(() => shipments.map(sh =>
+    catProducts.reduce((sum,p) => sum + pallets(Number(sh.allocs[p.id]||0), p), 0)
+  ), [shipments, catProducts]);
+
+  const updateAlloc = useCallback((shipId, pid, val) => {
+    setShipments(prev => prev.map(sh =>
+      sh.id===shipId ? {...sh, allocs:{...sh.allocs,[pid]:Number(val)||0}} : sh
+    ));
+  }, [setShipments]);
+
+  const updateShipment = useCallback((shipId, field, val) => {
+    setShipments(prev => prev.map(sh => {
+      if (sh.id!==shipId) return sh;
+      const u = {...sh,[field]:val};
+      if (field==="shipDate") u.arrivalDate = addDays(val, TRANSIT_DAYS);
+      return u;
+    }));
+  }, [setShipments]);
+
+  const addShipment = () => {
+    const nextId = Math.max(...shipments.map(s=>s.id))+1;
+    const prefix = container==="美麗多"?"TWMIL":container==="飼料"?"FEED":"HAY";
+    const label = `${prefix}26/${String(nextId+1).padStart(2,"0")}`;
+    setShipments(prev=>[...prev,{id:nextId,label,shipDate:"",arrivalDate:"",status:"planned",note:"",allocs:{}}]);
+  };
+
+  const handleStockImport = e => {
+    const file = e.target.files[0]; if (!file) return;
+    const reader = new FileReader();
+    reader.onload = ev => {
+      const wb = XLSX.read(ev.target.result,{type:"array"});
+      const rows = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]],{defval:0});
+      setProducts(prev => prev.map(p => {
+        const m = rows.find(r => String(r["品號"]||"").trim()===p.id);
+        return m ? {...p, stock:Number(m["數量合計"]||m["公司倉"]||0)} : p;
+      }));
+      setImportStep(null); alert("庫存匯入完成！");
+    };
+    reader.readAsArrayBuffer(file);
+  };
+
+  const exportOrder = () => {
+    const wb = XLSX.utils.book_new();
+    shipments.forEach((sh,si) => {
+      const rows = catProducts.filter(p=>Number(sh.allocs[p.id]||0)>0).map(p => {
+        const qty = Number(sh.allocs[p.id]||0);
+        return {"品號":p.id,"品名":p.name,"採購量":qty,"板數":pallets(qty,p).toFixed(1)};
+      });
+      if(rows.length===0) return;
+      rows.push({"品號":"合計","品名":"","採購量":"","板數":shipmentPallets[si].toFixed(1)});
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(rows), sh.label);
+    });
+    XLSX.writeFile(wb, `MOMI訂貨規劃_${container}_26-27.xlsx`);
+  };
+
+  return (
+    <div style={{fontFamily:"'Noto Sans TC',system-ui,sans-serif",background:"#f1f5f9",minHeight:"100vh"}}>
+
+      <div style={{background:"#1e293b",padding:"14px 18px"}}>
+        <div style={{color:"#64748b",fontSize:11,letterSpacing:2}}>MOMI 摩米</div>
+        <div style={{color:"#fff",fontSize:17,fontWeight:800,marginTop:2,marginBottom:12}}>採購訂貨規劃 2026–27</div>
+        <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+          <button onClick={()=>setImportStep("stock")}
+            style={{background:"#334155",color:"#e2e8f0",border:"none",borderRadius:8,padding:"8px 14px",fontSize:13,cursor:"pointer"}}>
+            📥 匯入庫存
+          </button>
+          <button onClick={exportOrder}
+            style={{background:containerColor,color:"#fff",border:"none",borderRadius:8,padding:"8px 14px",fontSize:13,cursor:"pointer",fontWeight:700}}>
+            📤 匯出訂單 ({container})
+          </button>
+        </div>
+      </div>
+
+      <div style={{background:"#0f172a",padding:"0 16px",display:"flex",gap:4}}>
+        {CONTAINERS.map(c=>(
+          <button key={c.key} onClick={()=>setContainer(c.key)} style={{
+            background:"none",border:"none",padding:"11px 16px",fontSize:13,cursor:"pointer",fontWeight:700,
+            color:container===c.key?c.color:"#64748b",
+            borderBottom:container===c.key?`3px solid ${c.color}`:"3px solid transparent",
+          }}>{c.label}</button>
+        ))}
+      </div>
+
+      {importStep && (
+        <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.5)",zIndex:100,display:"flex",alignItems:"center",justifyContent:"center",padding:24}}>
+          <div style={{background:"#fff",borderRadius:16,padding:28,width:"100%",maxWidth:380}}>
+            <div style={{fontSize:16,fontWeight:700,marginBottom:8}}>匯入多倉庫存表</div>
+            <div style={{color:"#64748b",fontSize:13,marginBottom:16}}>從鼎新A1「多倉庫存表」轉出Excel，需有欄位：品號、數量合計</div>
+            <input type="file" accept=".xlsx,.xls" onChange={handleStockImport} style={{marginBottom:16,width:"100%"}} />
+            <button onClick={()=>setImportStep(null)}
+              style={{background:"#f1f5f9",border:"none",borderRadius:8,padding:"10px 20px",cursor:"pointer"}}>取消</button>
+          </div>
+        </div>
+      )}
+
+      <div style={{background:"#fff",borderBottom:"1px solid #e2e8f0",display:"flex"}}>
+        {[["schedule","船期總覽"],["alloc","分配訂貨"],["pressure","庫壓評估"],["suggest","庫存狀況"],["products","品項"],["settings","參數"]].map(([key,label])=>(
+          <button key={key} onClick={()=>setActiveTab(key)} style={{
+            flex:1,background:"none",border:"none",
+            borderBottom:activeTab===key?`3px solid ${containerColor}`:"3px solid transparent",
+            color:activeTab===key?containerColor:"#64748b",
+            padding:"11px 2px",fontSize:12,cursor:"pointer",fontWeight:activeTab===key?700:400
+          }}>{label}</button>
+        ))}
+      </div>
+
+      <div style={{padding:"16px 16px 40px",maxWidth:640,margin:"0 auto"}}>
+
+        {activeTab==="schedule" && (<>
+          <Card style={{background:"#f8fafc",borderColor:"#e2e8f0"}}>
+            <div style={{fontSize:13,fontWeight:600,color:"#475569"}}>
+              {container==="美麗多"?"🪵 美麗多貨櫃（愛沙尼亞）":container==="飼料"?"🥕 飼料貨櫃":"🌿 牧草貨櫃"}
+            </div>
+            <div style={{fontSize:11,color:"#94a3b8",marginTop:2}}>前置時間 {TRANSIT_DAYS} 天 ／ 貨櫃容量 {CONTAINER_PALLETS} 板</div>
+          </Card>
+
+          {shipments.map((sh,si)=>{
+            const pals = shipmentPallets[si];
+            const isOver = pals>CONTAINER_PALLETS && sh.status!=="past";
+            const pct = Math.min((pals/CONTAINER_PALLETS)*100,100);
+            const badge = shipBadge[sh.status]||shipBadge.pending;
+            return (
+              <Card key={sh.id} borderColor={sh.status==="past"?"#e2e8f0":isOver?"#fecaca":sh.status==="planned"?containerColor+"44":"#e2e8f0"}>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:10}}>
+                  <div>
+                    <div style={{fontSize:15,fontWeight:800,color:sh.status==="past"?"#94a3b8":"#1e293b"}}>{sh.label}</div>
+                    <span style={{background:badge.bg,color:badge.color,borderRadius:99,padding:"2px 8px",fontSize:11,fontWeight:700}}>{badge.text}</span>
+                  </div>
+                  <div style={{textAlign:"right"}}>
+                    <div style={{fontSize:18,fontWeight:800,color:isOver?"#ef4444":sh.status==="past"?"#94a3b8":"#1e293b"}}>
+                      {pals.toFixed(1)}<span style={{fontSize:12,fontWeight:400,color:"#94a3b8"}}> / {CONTAINER_PALLETS}板</span>
+                    </div>
+                    <div style={{fontSize:11,color:isOver?"#ef4444":containerColor,fontWeight:600}}>
+                      {isOver?`超出${(pals-CONTAINER_PALLETS).toFixed(1)}板`:`剩${(CONTAINER_PALLETS-pals).toFixed(1)}板`}
+                    </div>
+                  </div>
+                </div>
+
+                {pals>0 && (
+                  <div style={{background:"#f1f5f9",borderRadius:99,height:8,marginBottom:12,overflow:"hidden"}}>
+                    <div style={{height:"100%",borderRadius:99,width:`${pct}%`,
+                      background:sh.status==="past"?"#cbd5e1":isOver?"#ef4444":pct>85?"#f59e0b":containerColor}}/>
+                  </div>
+                )}
+
+                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:8}}>
+                  <div>
+                    <Label>出貨日</Label>
+                    {sh.status==="past"
+                      ? <div style={{fontSize:14,fontWeight:600,color:"#94a3b8"}}>{sh.shipDate}</div>
+                      : <input type="date" value={sh.shipDate} onChange={e=>updateShipment(sh.id,"shipDate",e.target.value)}
+                          style={{width:"100%",border:"1px solid #e2e8f0",borderRadius:8,padding:"7px 10px",fontSize:13,boxSizing:"border-box"}}/>
+                    }
+                  </div>
+                  <div>
+                    <Label>預計到港</Label>
+                    {sh.status==="past"
+                      ? <div style={{fontSize:14,fontWeight:600,color:"#94a3b8"}}>{sh.arrivalDate}</div>
+                      : <input type="date" value={sh.arrivalDate} onChange={e=>updateShipment(sh.id,"arrivalDate",e.target.value)}
+                          style={{width:"100%",border:"1px solid #e2e8f0",borderRadius:8,padding:"7px 10px",fontSize:13,boxSizing:"border-box"}}/>
+                    }
+                  </div>
+                </div>
+
+                {pals>0 && (
+                  <div style={{background:"#f8fafc",borderRadius:10,padding:"10px 12px",fontSize:12}}>
+                    {catProducts.filter(p=>Number(sh.allocs[p.id]||0)>0).map(p=>{
+                      const qty = Number(sh.allocs[p.id]);
+                      return (
+                        <div key={p.id} style={{display:"flex",justifyContent:"space-between",marginBottom:3,color:sh.status==="past"?"#94a3b8":"#475569"}}>
+                          <span style={{flex:1,marginRight:8,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{p.name}</span>
+                          <span style={{fontWeight:600,whiteSpace:"nowrap"}}>{qty.toLocaleString()} ／ {pallets(qty,p).toFixed(1)}板</span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+
+                {sh.note && (
+                  <div style={{fontSize:11,color:sh.status==="past"?"#94a3b8":"#64748b",
+                    background:sh.status==="past"?"#f8fafc":sh.note.includes("⚠️")?"#fef9c3":"#f0fdf4",
+                    borderRadius:8,padding:"7px 10px",marginTop:8}}>
+                    {sh.note}
+                  </div>
+                )}
+              </Card>
+            );
+          })}
+          <button onClick={addShipment} style={{width:"100%",background:"none",border:"2px dashed #d1d5db",borderRadius:12,padding:"14px",fontSize:13,color:"#9ca3af",cursor:"pointer"}}>
+            ＋ 新增船期
+          </button>
+        </>)}
+
+        {activeTab==="alloc" && (<>
+          <div style={{display:"flex",gap:8,overflowX:"auto",marginBottom:14,paddingBottom:2}}>
+            {shipments.map((sh,si)=>{
+              const p = shipmentPallets[si];
+              const over = p>CONTAINER_PALLETS;
+              return (
+                <div key={sh.id} style={{background:"#fff",borderRadius:10,border:`1.5px solid ${over?"#fecaca":sh.status==="past"?"#f1f5f9":"#e2e8f0"}`,
+                  padding:"8px 12px",minWidth:80,flexShrink:0,textAlign:"center"}}>
+                  <div style={{fontSize:9,fontWeight:700,color:"#64748b"}}>{sh.label}</div>
+                  <div style={{fontSize:16,fontWeight:800,color:over?"#ef4444":sh.status==="past"?"#94a3b8":"#1e293b"}}>{p.toFixed(1)}</div>
+                  <div style={{fontSize:9,color:"#94a3b8"}}>/{CONTAINER_PALLETS}板</div>
+                  {over && <div style={{fontSize:9,color:"#ef4444",fontWeight:600}}>超出!</div>}
+                </div>
+              );
+            })}
+          </div>
+
+          {catProducts.map(prod=>{
+            const s = suggestions.find(x=>x.id===prod.id)||{...prod,avg:0,daily:0,daysLeft:999,status:"ok",inTransitQty:0};
+            return (
+              <Card key={prod.id} borderColor={s.status==="danger"?"#fecaca":s.status==="warning"?"#fde68a":"#e2e8f0"}>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:10}}>
+                  <div style={{flex:1,marginRight:8}}>
+                    <div style={{fontSize:13,fontWeight:700,lineHeight:1.4}}>{prod.name}</div>
+                    <div style={{fontSize:10,color:"#94a3b8",fontFamily:"monospace"}}>{prod.id}</div>
+                  </div>
+                  <span style={{background:statusColors[s.status]+"22",color:statusColors[s.status],
+                    borderRadius:99,padding:"2px 8px",fontSize:11,fontWeight:700,whiteSpace:"nowrap"}}>
+                    {statusLabels[s.status]}
+                  </span>
+                </div>
+                <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:8,marginBottom:12,
+                  background:"#f8fafc",borderRadius:10,padding:"10px 12px"}}>
+                  <div><div style={{fontSize:9,color:"#94a3b8"}}>現有庫存</div><div style={{fontSize:13,fontWeight:700}}>{prod.stock.toLocaleString()}</div></div>
+                  <div><div style={{fontSize:9,color:"#94a3b8"}}>在途</div><div style={{fontSize:13,fontWeight:700,color:containerColor}}>{s.inTransitQty.toLocaleString()}</div></div>
+                  <div><div style={{fontSize:9,color:"#94a3b8"}}>月均銷</div><div style={{fontSize:13,fontWeight:700}}>{Math.round(s.avg).toLocaleString()}</div></div>
+                  <div>
+                    <div style={{fontSize:9,color:"#94a3b8"}}>可撐天數</div>
+                    <div style={{fontSize:13,fontWeight:700,color:statusColors[s.status]}}>{s.daysLeft>900?"—":Math.round(s.daysLeft)+"天"}</div>
+                  </div>
+                </div>
+                <div style={{display:"grid",gridTemplateColumns:`repeat(${Math.min(shipments.length,5)},1fr)`,gap:6}}>
+                  {shipments.map((sh)=>{
+                    const qty = Number(sh.allocs[prod.id]||0);
+                    const isPast = sh.status==="past";
+                    return (
+                      <div key={sh.id}>
+                        <div style={{fontSize:9,color:isPast?"#94a3b8":"#475569",fontWeight:600,marginBottom:3,
+                          whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{sh.label}</div>
+                        <input type="number" value={qty||""} placeholder="0" disabled={isPast}
+                          onChange={e=>updateAlloc(sh.id,prod.id,e.target.value)}
+                          style={{width:"100%",boxSizing:"border-box",
+                            border:`1.5px solid ${isPast?"#f1f5f9":qty>0?containerColor:"#e2e8f0"}`,
+                            borderRadius:8,padding:"7px 5px",fontSize:12,textAlign:"right",
+                            background:isPast?"#f8fafc":qty>0?containerColor+"11":"#fff",
+                            fontWeight:600,color:isPast?"#94a3b8":"#1e293b"}}/>
+                        <div style={{fontSize:9,color:"#94a3b8",textAlign:"right",marginTop:2}}>{qty>0?pallets(qty,prod).toFixed(1)+"板":"—"}</div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </Card>
+            );
+          })}
+        </>)}
+
+        {activeTab==="suggest" && (<>
+          <Card style={{background:"#eff6ff",borderColor:"#bfdbfe"}}>
+            <div style={{fontSize:13,fontWeight:600,color:"#1e40af",marginBottom:2}}>📊 {container} 庫存狀況</div>
+            <div style={{fontSize:11,color:"#3730a3"}}>可撐天數以月均銷量計算，在途含未到港船期數量。</div>
+          </Card>
+          {suggestions.map(s=>(
+            <Card key={s.id} borderColor={s.status==="danger"?"#fecaca":s.status==="warning"?"#fde68a":"#e2e8f0"}>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:12}}>
+                <div>
+                  <div style={{fontSize:13,fontWeight:700}}>{s.name}</div>
+                  <div style={{fontSize:10,color:"#94a3b8",fontFamily:"monospace"}}>{s.id}</div>
+                </div>
+                <span style={{background:statusColors[s.status]+"22",color:statusColors[s.status],borderRadius:99,padding:"3px 10px",fontSize:11,fontWeight:700}}>
+                  {statusLabels[s.status]}
+                </span>
+              </div>
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"10px 20px"}}>
+                <div><Label>現有庫存</Label><BigNum>{s.stock.toLocaleString()}</BigNum></div>
+                <div><Label>在途庫存</Label><BigNum color={containerColor}>{s.inTransitQty.toLocaleString()}</BigNum></div>
+                <div><Label>現有＋在途可撐</Label><BigNum color={statusColors[s.status]}>{s.daysLeft>900?"—":Math.round(s.daysLeft)+"天"}</BigNum></div>
+                <div><Label>月均銷量</Label><BigNum>{Math.round(s.avg).toLocaleString()}</BigNum></div>
+              </div>
+            </Card>
+          ))}
+        </>)}
+
+        {activeTab==="pressure" && (<>
+          <Card style={{background:"#f0fdf4",borderColor:"#bbf7d0"}}>
+            <div style={{fontSize:13,fontWeight:600,color:"#166534",marginBottom:4}}>📦 {container} 庫壓評估</div>
+            <div style={{fontSize:11,color:"#166534"}}>✅ 正常 0–30天 ／ 🟡 偏高 30–60天 ／ 🔴 過重 60天以上 ／ ⚠️ 斷貨風險</div>
+          </Card>
+          {(() => {
+            const shipArr = shipments.map(sh => new Date(sh.arrivalDate));
+            const pressureColors = { over:"#ef4444", high:"#f59e0b", ok:"#22c55e", zero:"#94a3b8" };
+            const pressureLabels = { over:"🔴過重", high:"🟡偏高", ok:"✅正常", zero:"—" };
+            return catProducts.map(prod => {
+              const avg = avgSales(prod.id, avgMonths, salesData);
+              const daily = avg / 30;
+              if (daily === 0) return null;
+              const rows = shipments.map((sh, si) => {
+                const daysToArr = Math.max(0, (shipArr[si] - today) / 86400000);
+                const prevOrders = shipments.slice(0, si).reduce((s, prev) => s + Number(prev.allocs[prod.id]||0), 0);
+                const thisOrder = Number(sh.allocs[prod.id]||0);
+                const stockAtArr = Math.max(0, prod.stock + (inTransit[prod.id]||0) + prevOrders - daily * daysToArr);
+                const totalAtArr = stockAtArr + thisOrder;
+                const daysOfStock = totalAtArr / daily;
+                const pressure = daysOfStock > 60 ? "over" : daysOfStock > 30 ? "high" : daysOfStock > 0 ? "ok" : "zero";
+                const stockoutBefore = stockAtArr <= 0 && sh.status !== "past";
+                return { sh, stockAtArr, thisOrder, daysOfStock, pressure, stockoutBefore };
+              });
+              const hasIssue = rows.some(r => r.pressure === "over" || r.stockoutBefore);
+              return (
+                <Card key={prod.id} borderColor={hasIssue ? "#fecaca" : "#e2e8f0"}>
+                  <div style={{fontSize:13,fontWeight:700,marginBottom:2}}>{prod.name}</div>
+                  <div style={{fontSize:10,color:"#94a3b8",fontFamily:"monospace",marginBottom:12}}>{prod.id} ｜ 月均 {Math.round(avg).toLocaleString()}</div>
+                  {rows.map(({sh, stockAtArr, thisOrder, daysOfStock, pressure, stockoutBefore}) => (
+                    <div key={sh.id} style={{marginBottom:10,padding:"10px 12px",borderRadius:10,
+                      background: sh.status==="past"?"#f8fafc":pressure==="over"?"#fef2f2":pressure==="high"?"#fffbeb":"#f0fdf4",
+                      border:`1px solid ${sh.status==="past"?"#f1f5f9":pressureColors[pressure]+"44"}`}}>
+                      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:6}}>
+                        <span style={{fontSize:12,fontWeight:700,color:sh.status==="past"?"#94a3b8":"#475569"}}>{sh.label} {sh.arrivalDate}</span>
+                        {sh.status!=="past" && <span style={{fontSize:11,fontWeight:700,color:pressureColors[pressure]}}>{pressureLabels[pressure]}</span>}
+                        {sh.status==="past" && <span style={{fontSize:11,color:"#94a3b8"}}>已出貨</span>}
+                      </div>
+                      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:8}}>
+                        <div><div style={{fontSize:9,color:"#94a3b8"}}>到港剩餘庫存</div>
+                          <div style={{fontSize:13,fontWeight:700,color:stockoutBefore?"#ef4444":"#1e293b"}}>{stockoutBefore?"⚠️斷貨":Math.round(stockAtArr).toLocaleString()}</div></div>
+                        <div><div style={{fontSize:9,color:"#94a3b8"}}>本批採購量</div>
+                          <div style={{fontSize:13,fontWeight:700,color:thisOrder>0?containerColor:"#94a3b8"}}>{thisOrder>0?thisOrder.toLocaleString():"未採購"}</div></div>
+                        <div><div style={{fontSize:9,color:"#94a3b8"}}>到港後天數</div>
+                          <div style={{fontSize:13,fontWeight:700,color:sh.status==="past"?"#94a3b8":pressureColors[pressure]}}>{Math.round(daysOfStock)}天</div></div>
+                      </div>
+                      {sh.status!=="past" && (
+                        <div style={{marginTop:8,background:"rgba(255,255,255,0.6)",borderRadius:8,height:6,overflow:"hidden"}}>
+                          <div style={{height:"100%",borderRadius:8,width:`${Math.min(100,(daysOfStock/90)*100)}%`,background:pressureColors[pressure]}}/>
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </Card>
+              );
+            });
+          })()}
+        </>)}
+
+        {activeTab==="products" && (<>
+          <div style={{fontSize:12,color:"#94a3b8",marginBottom:14}}>
+            {container} 共 {catProducts.length} 個品項。upp/pslots/moq 請依實際物流條件填入。
+          </div>
+          {catProducts.map((p)=>{
+            const globalIdx = products.findIndex(x=>x.id===p.id);
+            return (
+              <Card key={p.id}>
+                <div style={{fontSize:14,fontWeight:700,marginBottom:2}}>{p.name}</div>
+                <div style={{fontSize:10,color:"#94a3b8",fontFamily:"monospace",marginBottom:14}}>{p.id}</div>
+                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
+                  {[
+                    {label:"現有庫存",key:"stock",step:1,unit:"個"},
+                    {label:"每板數量",key:"upp",step:1,unit:"個/板"},
+                    {label:"佔板位數",key:"pslots",step:0.5,unit:"板位"},
+                    {label:"MOQ",key:"moq",step:1,unit:"個"},
+                  ].map(({label,key,step,unit})=>(
+                    <div key={key}>
+                      <Label>{label}</Label>
+                      <div style={{display:"flex",alignItems:"center",gap:6}}>
+                        <input type="number" step={step} value={p[key]}
+                          onChange={e=>setProducts(prev=>prev.map((x,j)=>j===globalIdx?{...x,[key]:Number(e.target.value)}:x))}
+                          style={{flex:1,minWidth:0,border:"1px solid #e2e8f0",borderRadius:8,padding:"9px 10px",fontSize:15,textAlign:"right",fontWeight:600}}/>
+                        <span style={{fontSize:11,color:"#94a3b8",whiteSpace:"nowrap"}}>{unit}</span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </Card>
+            );
+          })}
+        </>)}
+
+        {activeTab==="settings" && (<>
+          <Card>
+            <Label>銷量計算參考月數</Label>
+            <div style={{fontSize:12,color:"#94a3b8",marginBottom:10}}>用最近幾個月銷量計算日均值</div>
+            <select value={avgMonths} onChange={e=>setAvgMonths(Number(e.target.value))}
+              style={{width:"100%",border:"1px solid #e2e8f0",borderRadius:8,padding:"10px 14px",fontSize:16}}>
+              {[1,2,3].map(m=><option key={m} value={m}>{m} 個月（{m===1?"6月":m===2?"5-6月":"4-6月"}）</option>)}
+            </select>
+          </Card>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
+            <Card><Label>運送天數</Label><BigNum size={24} color="#94a3b8">{TRANSIT_DAYS} 天</BigNum></Card>
+            <Card><Label>貨櫃板數</Label><BigNum size={24} color="#94a3b8">{CONTAINER_PALLETS} 板</BigNum></Card>
+          </div>
+          <Card>
+            <Label>品項分類統計</Label>
+            {CONTAINERS.map(c=>{
+              const cnt = products.filter(p=>p.category===c.key).length;
+              return <div key={c.key} style={{display:"flex",justifyContent:"space-between",padding:"6px 0",borderBottom:"1px solid #f1f5f9",fontSize:13}}>
+                <span style={{color:c.color,fontWeight:600}}>{c.label}</span>
+                <span style={{color:"#475569"}}>{cnt} 個品項</span>
+              </div>;
+            })}
+          </Card>
+        </>)}
+
+      </div>
+    </div>
+  );
+}
+
+// 自動生成 - 來源：銷退貨明細表 + 多倉庫存表 (2026-07-09)
+// 三個貨櫃：美麗多 | 飼料 | 牧草
+
+export const INIT_PRODUCTS = [
+  // ── 美麗多 ──
+  { id: "MLMN005", name: "美麗多木質墊料(絲)0.05公斤", unit: "包", category: "美麗多", upp: 1, pslots: 1, stock: 516, moq: 1 },
+  { id: "MLMP07", name: "美麗多木質墊料(大顆粒)-3.5L", unit: "包", category: "美麗多", upp: 1, pslots: 1, stock: -60, moq: 1 },
+  { id: "MLMP10", name: "美麗多木質墊料(大顆粒)-50L", unit: "包", category: "美麗多", upp: 1, pslots: 1, stock: -50, moq: 1 },
+  { id: "MLMP2", name: "美麗多木質墊料(大顆粒)-10L", unit: "包", category: "美麗多", upp: 1, pslots: 1, stock: 2627, moq: 1 },
+  { id: "MLMP4", name: "美麗多木質墊料(大顆粒)-20L", unit: "包", category: "美麗多", upp: 1, pslots: 1, stock: -22, moq: 1 },
+  { id: "MLMS07", name: "美麗多木質墊料(小顆粒)-3.5L", unit: "包", category: "美麗多", upp: 1, pslots: 1, stock: 25, moq: 1 },
+  { id: "MLMS10", name: "美麗多木質墊料(小顆粒)-50L", unit: "包", category: "美麗多", upp: 1, pslots: 1, stock: 25, moq: 1 },
+  { id: "MLMS2", name: "美麗多木質墊料(小顆粒)-10L", unit: "包", category: "美麗多", upp: 1, pslots: 1, stock: 3004, moq: 1 },
+  { id: "MMC5", name: "美麗多木刨花(小)-25L", unit: "包", category: "美麗多", upp: 1, pslots: 1, stock: 543, moq: 1 },
+  { id: "MMCP5", name: "美麗多木刨花(大)-25L", unit: "包", category: "美麗多", upp: 1, pslots: 1, stock: 1342, moq: 1 },
+  { id: "MMN50G", name: "美麗多純淨白楊木絲築巢(8入)", unit: "盒", category: "美麗多", upp: 1, pslots: 1, stock: 0, moq: 1 },
+  { id: "MMR10L", name: "美麗多實驗室無塵純萃天然木梗", unit: "包", category: "美麗多", upp: 1, pslots: 1, stock: 510, moq: 1 },
+  // ── 飼料 ──
+  { id: "APPLE", name: "摩米特級凍乾蘋果小食 15克裝", unit: "包", category: "飼料", upp: 1, pslots: 1, stock: 1030, moq: 1 },
+  { id: "BANANA", name: "摩米特級凍乾香蕉小食 15克裝", unit: "包", category: "飼料", upp: 1, pslots: 1, stock: 301, moq: 1 },
+  { id: "BERRY", name: "摩米特級凍乾草莓小食 15克裝", unit: "包", category: "飼料", upp: 1, pslots: 1, stock: 1220, moq: 1 },
+  { id: "BLUEBERRY", name: "摩米特級凍乾藍莓小食 15克裝", unit: "包", category: "飼料", upp: 1, pslots: 1, stock: 999, moq: 1 },
+  { id: "MCCA64", name: "摩米營養護極幼草粉 - 原味 64克裝", unit: "瓶", category: "飼料", upp: 1, pslots: 1, stock: 438, moq: 1 },
+  { id: "MCCATB", name: "摩米草粉試吃禮-原味", unit: "包", category: "飼料", upp: 1, pslots: 1, stock: -1132, moq: 1 },
+  { id: "MCCATB-S", name: "摩米草粉自用(單條)-原味", unit: "支", category: "飼料", upp: 1, pslots: 1, stock: 485, moq: 1 },
+  { id: "MCCB64", name: "摩米營養護極幼草粉 - 香蕉味 64克裝", unit: "盒", category: "飼料", upp: 1, pslots: 1, stock: -10, moq: 1 },
+  { id: "MCCBB100", name: "摩米保康全營養草粉-香蕉味(大容量)*100條", unit: "箱", category: "飼料", upp: 1, pslots: 1, stock: -3, moq: 1 },
+  { id: "MCCBTB", name: "摩米草粉試吃禮-香蕉味", unit: "包", category: "飼料", upp: 1, pslots: 1, stock: -546, moq: 1 },
+  { id: "MCCBTB-S", name: "摩米草粉自用(單條)-香蕉味", unit: "支", category: "飼料", upp: 1, pslots: 1, stock: 964, moq: 1 },
+  { id: "MKHF6", name: "摩米卡莉寵物飲水機專用濾芯", unit: "盒", category: "飼料", upp: 1, pslots: 1, stock: 508, moq: 1 },
+  { id: "MKHSTW", name: "寵物飲水機-標準版-蘇菲白", unit: "組", category: "飼料", upp: 1, pslots: 1, stock: 156, moq: 1 },
+  { id: "PAPAYA", name: "摩米特級凍乾木瓜小食 15克裝", unit: "包", category: "飼料", upp: 1, pslots: 1, stock: 0, moq: 1 },
+  { id: "PEACH", name: "摩米特級凍乾水蜜桃小食 15克裝", unit: "包", category: "飼料", upp: 1, pslots: 1, stock: 566, moq: 1 },
+  { id: "PEAR", name: "摩米特級凍乾雪梨小食 15克裝", unit: "包", category: "飼料", upp: 1, pslots: 1, stock: 884, moq: 1 },
+  { id: "PINEAPPLE", name: "摩米特級凍乾鳯梨小食 15克裝", unit: "包", category: "飼料", upp: 1, pslots: 1, stock: -56, moq: 1 },
+  { id: "TIMCA1", name: "摩米營養全幼兔 A 1公斤裝", unit: "包", category: "飼料", upp: 1, pslots: 1, stock: 218, moq: 1 },
+  { id: "TIMCA5", name: "摩米營養全幼兔 A 5公斤裝", unit: "箱", category: "飼料", upp: 1, pslots: 1, stock: 37, moq: 1 },
+  { id: "TIMCG1", name: "摩米營養全天竺鼠 G 1公斤裝", unit: "包", category: "飼料", upp: 1, pslots: 1, stock: 887, moq: 1 },
+  { id: "TIMCG5", name: "摩米營養全天竺鼠 G 5公斤裝", unit: "箱", category: "飼料", upp: 1, pslots: 1, stock: 39, moq: 1 },
+  { id: "TIMCT1", name: "摩米營養全成兔 T 1公斤裝", unit: "包", category: "飼料", upp: 1, pslots: 1, stock: 1223, moq: 1 },
+  { id: "TIMCT5", name: "摩米營養全成兔 T 5公斤裝", unit: "箱", category: "飼料", upp: 1, pslots: 1, stock: 214, moq: 1 },
+  { id: "TIMIC1", name: "摩米營養全老兔 IC1公斤裝", unit: "包", category: "飼料", upp: 1, pslots: 1, stock: 168, moq: 1 },
+  { id: "TIMIC5", name: "摩米營養全老兔 IC 5公斤裝", unit: "箱", category: "飼料", upp: 1, pslots: 1, stock: 47, moq: 1 },
+  { id: "TIMNT4", name: "摩米全天然T 4磅裝(1.8公斤)", unit: "包", category: "飼料", upp: 1, pslots: 1, stock: 6, moq: 1 },
+  { id: "TPCA", name: "飼料試吃-幼兔*10", unit: "組", category: "飼料", upp: 1, pslots: 1, stock: -3, moq: 1 },
+  { id: "TPCG", name: "飼料試吃-天竺鼠*10", unit: "組", category: "飼料", upp: 1, pslots: 1, stock: -1, moq: 1 },
+  { id: "TPCT", name: "飼料試吃-成兔*10", unit: "組", category: "飼料", upp: 1, pslots: 1, stock: -1, moq: 1 },
+  { id: "TPIC", name: "飼料試吃-老兔*10", unit: "組", category: "飼料", upp: 1, pslots: 1, stock: -4, moq: 1 },
+  { id: "TPNT", name: "飼料試吃-全天然*10", unit: "包", category: "飼料", upp: 1, pslots: 1, stock: 2, moq: 1 },
+  // ── 牧草 ──
+  { id: "ALC1", name: "摩米苜蓿草磚", unit: "箱", category: "牧草", upp: 1, pslots: 1, stock: 867, moq: 1 },
+  { id: "ALFA1", name: "苜蓿草1公斤(未壓縮)", unit: "箱", category: "牧草", upp: 1, pslots: 1, stock: 216, moq: 1 },
+  { id: "ALFA2", name: "苜蓿草2公斤(壓縮)", unit: "箱", category: "牧草", upp: 1, pslots: 1, stock: -92, moq: 1 },
+  { id: "ALFAZX", name: "苜蓿草(無壓縮)", unit: "KG", category: "牧草", upp: 1, pslots: 1, stock: -130, moq: 1 },
+  { id: "ALFTB-10", name: "苜蓿試吃包*10", unit: "組", category: "牧草", upp: 1, pslots: 1, stock: -2, moq: 1 },
+  { id: "MOMI-ALFAZX", name: "苜蓿草(壓縮)", unit: "KG", category: "牧草", upp: 1, pslots: 1, stock: -33, moq: 1 },
+  { id: "MOMI-FIRST", name: "First Cut第一割提牧草(提摩西草)", unit: "KG", category: "牧草", upp: 1, pslots: 1, stock: -131, moq: 1 },
+  { id: "MOMI-SECOND", name: "Second Cut 第二割提牧草(提摩西草)", unit: "KG", category: "牧草", upp: 1, pslots: 1, stock: -2217, moq: 1 },
+  { id: "ORCGZX", name: "果園草(捆)", unit: "KG", category: "牧草", upp: 1, pslots: 1, stock: -522, moq: 1 },
+  { id: "PFTF2", name: "自用牧草-未壓一割", unit: "包", category: "牧草", upp: 1, pslots: 1, stock: 12, moq: 1 },
+  { id: "PFTO2", name: "自用牧草-果園草", unit: "包", category: "牧草", upp: 1, pslots: 1, stock: 1, moq: 1 },
+  { id: "PFTS2", name: "自用牧草-未壓二割", unit: "包", category: "牧草", upp: 1, pslots: 1, stock: -6, moq: 1 },
+  { id: "PORCG", name: "農夫特級果園草1公斤", unit: "箱", category: "牧草", upp: 1, pslots: 1, stock: 15, moq: 1 },
+  { id: "PTA2", name: "自用牧草-苜蓿", unit: "箱", category: "牧草", upp: 1, pslots: 1, stock: -26, moq: 1 },
+  { id: "PTF2", name: "自用牧草-一割", unit: "包", category: "牧草", upp: 1, pslots: 1, stock: 16, moq: 1 },
+  { id: "PTIMF1", name: "農夫特選第一割提摩西草1公斤", unit: "箱", category: "牧草", upp: 1, pslots: 1, stock: 12, moq: 1 },
+  { id: "PTIMFTB-10", name: "皇牌一割試吃包*10", unit: "組", category: "牧草", upp: 1, pslots: 1, stock: 56, moq: 1 },
+  { id: "PTIMS1", name: "農夫特選第二割提摩西草1公斤", unit: "箱", category: "牧草", upp: 1, pslots: 1, stock: 78, moq: 1 },
+  { id: "PTIMSTB-10", name: "皇牌二割試吃包*10", unit: "組", category: "牧草", upp: 1, pslots: 1, stock: 72, moq: 1 },
+  { id: "PTS2", name: "自用牧草-二割", unit: "包", category: "牧草", upp: 1, pslots: 1, stock: 12, moq: 1 },
+  { id: "TIMACTB", name: "苜蓿草磚試吃包*5", unit: "包", category: "牧草", upp: 1, pslots: 1, stock: -148, moq: 1 },
+  { id: "TIMC1", name: "摩米提摩西草磚", unit: "盒", category: "牧草", upp: 1, pslots: 1, stock: 414, moq: 1 },
+  { id: "TIMF", name: "First Cut第一割提牧草(未壓)", unit: "KG", category: "牧草", upp: 1, pslots: 1, stock: -15, moq: 1 },
+  { id: "TIMF05", name: "First第一割牧草(提摩西草)  500G", unit: "包", category: "牧草", upp: 1, pslots: 1, stock: 25, moq: 1 },
+  { id: "TIMF1", name: "First第一割牧草(提摩西草)  1000G", unit: "包", category: "牧草", upp: 1, pslots: 1, stock: 277, moq: 1 },
+  { id: "TIMF10", name: "First第一割提牧草(提摩西草) 10KG", unit: "箱", category: "牧草", upp: 1, pslots: 1, stock: -37, moq: 1 },
+  { id: "TIMF25", name: "First第一割牧草(提摩西草) 2.5KG", unit: "箱", category: "牧草", upp: 1, pslots: 1, stock: 236, moq: 1 },
+  { id: "TIMF5", name: "First第一割提牧草(提摩西草) 5KG", unit: "箱", category: "牧草", upp: 1, pslots: 1, stock: -12, moq: 1 },
+  { id: "TIMFTB-10", name: "一割試吃包*10", unit: "組", category: "牧草", upp: 1, pslots: 1, stock: -30, moq: 1 },
+  { id: "TIMS", name: "Second Cut 第二割提牧草(未壓)", unit: "KG", category: "牧草", upp: 1, pslots: 1, stock: -503, moq: 1 },
+  { id: "TIMS05", name: "Second第二割牧草(提摩西草)  500G", unit: "包", category: "牧草", upp: 1, pslots: 1, stock: 60, moq: 1 },
+  { id: "TIMS1", name: "Second第二割提牧草(提摩西草)  1000G", unit: "包", category: "牧草", upp: 1, pslots: 1, stock: 204, moq: 1 },
+  { id: "TIMS10", name: "Second第二割提牧草(提摩西草)  10KG", unit: "箱", category: "牧草", upp: 1, pslots: 1, stock: -12, moq: 1 },
+  { id: "TIMS25", name: "Second第二割提牧草(提摩西草)   2.5KG", unit: "箱", category: "牧草", upp: 1, pslots: 1, stock: 206, moq: 1 },
+  { id: "TIMS5", name: "Second第二割提牧草(提摩西草)  5KG", unit: "箱", category: "牧草", upp: 1, pslots: 1, stock: -7, moq: 1 },
+  { id: "TIMSTB-10", name: "二割試吃包*10", unit: "組", category: "牧草", upp: 1, pslots: 1, stock: -73, moq: 1 },
+  { id: "TIMTCTB", name: "提摩西草磚試吃包*5", unit: "包", category: "牧草", upp: 1, pslots: 1, stock: -94, moq: 1 },
+  // ── 其他 ──
+  { id: "MTOYG3", name: "白楊木玩具-木球*3", unit: "組", category: "其他", upp: 1, pslots: 1, stock: -134, moq: 1 },
+  { id: "MTOYG4", name: "白楊木玩具-木條", unit: "組", category: "其他", upp: 1, pslots: 1, stock: -468, moq: 1 },
+];
+
+// 月銷量 [Jun, May, Apr]
+export const INIT_SALES = {
+  // 美麗多
+  MLMN005: [52, 64, 72],
+  MLMP07: [0, 0, 19],
+  MLMP10: [13, 25, 39],
+  MLMP2: [1323, 1825, 2295],
+  MLMP4: [69, 298, 305],
+  MLMS07: [84, 189, 122],
+  MLMS10: [19, 33, 19],
+  MLMS2: [1631, 1447, 1430],
+  MMC5: [58, 62, 102],
+  MMCP5: [90, 101, 159],
+  MMN50G: [0, 0, 6],
+  MMR10L: [19, 32, 99],
+  // 飼料
+  APPLE: [653, 618, 662],
+  BANANA: [224, 190, 219],
+  BERRY: [329, 409, 343],
+  BLUEBERRY: [265, 323, 197],
+  MCCA64: [275, 292, 317],
+  MCCATB: [136, 100, 77],
+  MCCATB-S: [71, 40, 181],
+  MCCB64: [294, 296, 370],
+  MCCBB100: [0, 1, 0],
+  MCCBTB: [136, 70, 64],
+  MCCBTB-S: [20, 34, 161],
+  MKHF6: [17, 5, 0],
+  MKHSTW: [20, 12, 0],
+  PAPAYA: [8, 39, 5],
+  PEACH: [130, 183, 138],
+  PEAR: [89, 175, 89],
+  PINEAPPLE: [160, 134, 263],
+  TIMCA1: [411, 332, 388],
+  TIMCA5: [7, 17, 8],
+  TIMCG1: [384, 293, 279],
+  TIMCG5: [19, 26, 6],
+  TIMCT1: [860, 1243, 726],
+  TIMCT5: [88, 44, 92],
+  TIMIC1: [332, 212, 289],
+  TIMIC5: [21, 21, 18],
+  TIMNT4: [43, 21, 17],
+  TPCA: [18, 12, 23],
+  TPCG: [18, 16, 19],
+  TPCT: [21, 17, 23],
+  TPIC: [18, 12, 23],
+  TPNT: [6, 11, 23],
+  // 牧草
+  ALC1: [366, 431, 506],
+  ALFA1: [482, 164, 669],
+  ALFA2: [16, 76, 0],
+  ALFAZX: [30, 0, 20],
+  ALFTB-10: [0, 2, 0],
+  MOMI-ALFAZX: [0, 0, 3],
+  MOMI-FIRST: [0, 0, 10],
+  MOMI-SECOND: [0, 0, 675],
+  ORCGZX: [0, 131, 95],
+  PFTF2: [0, 0, 1],
+  PFTO2: [0, 1, 1],
+  PFTS2: [0, 0, 1],
+  PORCG: [61, 50, 123],
+  PTA2: [176, 153, 202],
+  PTF2: [1, 40, 87],
+  PTIMF1: [275, 300, 288],
+  PTIMFTB-10: [0, 2, 0],
+  PTIMS1: [288, 222, 458],
+  PTIMSTB-10: [0, 2, 0],
+  PTS2: [97, 26, 8],
+  TIMACTB: [71, 15, 15],
+  TIMC1: [736, 933, 1139],
+  TIMF: [0, 0, 15],
+  TIMF05: [115, 126, 220],
+  TIMF1: [428, 447, 547],
+  TIMF10: [63, 77, 119],
+  TIMF25: [484, 377, 483],
+  TIMF5: [30, 53, 53],
+  TIMFTB-10: [27, 17, 17],
+  TIMS: [0, 10, 248],
+  TIMS05: [311, 335, 449],
+  TIMS1: [821, 838, 1005],
+  TIMS10: [162, 85, 149],
+  TIMS25: [707, 1123, 982],
+  TIMS5: [78, 68, 71],
+  TIMSTB-10: [72, 17, 10],
+  TIMTCTB: [71, 21, 25],
+  // 其他
+  MTOYG3: [5, 0, 71],
+  MTOYG4: [155, 78, 140],
+};
