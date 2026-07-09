@@ -2,16 +2,15 @@ import { useState, useMemo, useCallback } from "react";
 import * as XLSX from "xlsx";
 import { INIT_PRODUCTS, INIT_SALES } from "./data.js";
 
-const CONTAINER_PALLETS = 48;
 const TRANSIT_DAYS = 60; // 下單後2個月出貨
 
 const statusColors = { danger: "#ef4444", warning: "#f59e0b", ok: "#22c55e" };
 const statusLabels  = { danger: "⚠️快斷貨", warning: "留意", ok: "正常" };
 
 const CONTAINERS = [
-  { key: "美麗多", label: "🪵 美麗多", color: "#8b5cf6" },
-  { key: "飼料",  label: "🥕 飼料",  color: "#f59e0b" },
-  { key: "牧草",  label: "🌿 牧草",  color: "#22c55e" },
+  { key: "美麗多", label: "🪵 美麗多", color: "#8b5cf6", pallets: 48, fixedPallets: 0 },
+  { key: "飼料",  label: "🥕 飼料",  color: "#f59e0b", pallets: 10, fixedPallets: 2 },
+  { key: "牧草",  label: "🌿 牧草",  color: "#22c55e", pallets: 48, fixedPallets: 0 },
 ];
 
 const makeShipments = () => ({
@@ -77,7 +76,9 @@ export default function ProcurementApp() {
   const [container, setContainer]       = useState("美麗多");
 
   const today = new Date();
-  const containerColor = CONTAINERS.find(c=>c.key===container)?.color || "#3b82f6";
+  const containerCfg = CONTAINERS.find(c=>c.key===container) || CONTAINERS[0];
+  const containerColor = containerCfg.color;
+  const CONTAINER_PALLETS = containerCfg.pallets - containerCfg.fixedPallets;
 
   const shipments = allShipments[container];
   const setShipments = useCallback((updater) => {
@@ -218,7 +219,7 @@ export default function ProcurementApp() {
             <div style={{fontSize:13,fontWeight:600,color:"#475569"}}>
               {container==="美麗多"?"🪵 美麗多貨櫃（愛沙尼亞）":container==="飼料"?"🥕 飼料貨櫃":"🌿 牧草貨櫃"}
             </div>
-            <div style={{fontSize:11,color:"#94a3b8",marginTop:2}}>前置時間 {TRANSIT_DAYS} 天 ／ 貨櫃容量 {CONTAINER_PALLETS} 板</div>
+            <div style={{fontSize:11,color:"#94a3b8",marginTop:2}}>前置時間 {TRANSIT_DAYS} 天 ／ 貨櫃容量 {CONTAINER_PALLETS} 板{containerCfg.fixedPallets>0?`（+固定${containerCfg.fixedPallets}板，共${containerCfg.pallets}板）`:""}</div>
           </Card>
 
           {shipments.map((sh,si)=>{
@@ -493,7 +494,7 @@ export default function ProcurementApp() {
           </Card>
           <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
             <Card><Label>運送天數</Label><BigNum size={24} color="#94a3b8">{TRANSIT_DAYS} 天</BigNum></Card>
-            <Card><Label>貨櫃板數</Label><BigNum size={24} color="#94a3b8">{CONTAINER_PALLETS} 板</BigNum></Card>
+            <Card><Label>貨櫃板數</Label><BigNum size={24} color="#94a3b8">{CONTAINER_PALLETS} 板</BigNum>{containerCfg.fixedPallets>0&&<div style={{fontSize:11,color:"#94a3b8",marginTop:2}}>共{containerCfg.pallets}板，固定{containerCfg.fixedPallets}板</div>}</Card>
           </div>
           <Card>
             <Label>品項分類統計</Label>
